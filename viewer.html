@@ -81,12 +81,19 @@
     <b>human_head.glb</b><br>
     <span id="origin-info">Loading model...</span><br>
     <span style="color:#ff6b6b;">&#9679;</span> World origin (0,0,0)<br>
-    <span style="color:#7ecfff;">&#9679;</span> Model origin reference
+    <span style="color:#7ecfff;">&#9679;</span> Model origin reference<br>
+    Camera pos: <span id="cam-pos">—</span><br>
+    Camera angle: <span id="cam-rot">—</span>
   </div>
 
   <div id="selected-info"></div>
 
   <div id="version" style="position:absolute;bottom:12px;left:50%;transform:translateX(-50%);color:#ccc;font-family:monospace;font-size:13px;pointer-events:none;user-select:none;background:rgba(0,0,0,0.6);padding:4px 14px;border-radius:20px;z-index:10;white-space:nowrap;">v0.1.0</div>
+
+  <div style="position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:10;display:flex;gap:6px;white-space:nowrap;">
+    <button id="btn-reset" title="Reset all parts to their original positions" style="background:rgba(0,0,0,0.6);color:#eee;border:1px solid #555;border-radius:6px;padding:6px 14px;font-family:monospace;font-size:13px;cursor:pointer;">&#8635; Reset positions</button>
+    <button id="btn-reset-cam" title="Reset camera to starting view" style="background:rgba(0,0,0,0.6);color:#eee;border:1px solid #555;border-radius:6px;padding:6px 14px;font-family:monospace;font-size:13px;cursor:pointer;">&#9654; Reset camera</button>
+  </div>
 
   <div id="controls">
     Left drag: rotate &nbsp;|&nbsp; Right drag: pan &nbsp;|&nbsp; Scroll: zoom &nbsp;|&nbsp; <b>Double-click</b>: select &amp; move part &nbsp;|&nbsp; Esc: deselect
@@ -113,6 +120,7 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { TransformControls } from 'three/addons/controls/TransformControls.js';
+    import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
     // --- Scene setup ---
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -120,6 +128,15 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     document.body.appendChild(renderer.domElement);
+
+    // CSS2D label renderer (overlays on top of WebGL canvas)
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0';
+    labelRenderer.domElement.style.pointerEvents = 'none';
+    labelRenderer.domElement.style.zIndex = '5';
+    document.body.appendChild(labelRenderer.domElement);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1a1a2e);
@@ -156,8 +173,59 @@
     const originMarker = new THREE.Mesh(originGeo, originMat);
     scene.add(originMarker);
 
-    const axesHelper = new THREE.AxesHelper(0.08);
-    scene.add(axesHelper);
+    // --- Axis scale: lines + ticks + labels from 0 to 50 ---
+    const SCALE_MAX = 50;
+    const TICK_EVERY = 5;
+    const TICK_SIZE = 1.2; // tick arm length in world units
+
+    const axisGroup = new THREE.Group();
+    scene.add(axisGroup);
+
+    const axesDef = [
+      { dir: new THREE.Vector3(1, 0, 0), color: '#ff4444', name: 'X',
+        perp1: new THREE.Vector3(0, 1, 0), perp2: new THREE.Vector3(0, 0, 1) },
+      { dir: new THREE.Vector3(0, 1, 0), color: '#44ff44', name: 'Y',
+        perp1: new THREE.Vector3(1, 0, 0), perp2: new THREE.Vector3(0, 0, 1) },
+      { dir: new THREE.Vector3(0, 0, 1), color: '#4488ff', name: 'Z',
+        perp1: new THREE.Vector3(1, 0, 0), perp2: new THREE.Vector3(0, 1, 0) },
+    ];
+
+    axesDef.forEach(({ dir, color, name, perp1 }) => {
+      // Axis line 0 → SCALE_MAX
+      const pts = [new THREE.Vector3(), dir.clone().multiplyScalar(SCALE_MAX)];
+      const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+      const lineMat = new THREE.LineBasicMaterial({ color });
+      axisGroup.add(new THREE.Line(lineGeo, lineMat));
+
+      // Axis label at end
+      const endLabel = document.createElement('div');
+      endLabel.textContent = name;
+      endLabel.style.cssText = `color:${color};font:bold 16px monospace;text-shadow:0 0 4px #000;`;
+      const endObj = new CSS2DObject(endLabel);
+      endObj.position.copy(dir.clone().multiplyScalar(SCALE_MAX + 2));
+      axisGroup.add(endObj);
+
+      // Ticks + number labels every TICK_EVERY units
+      for (let v = TICK_EVERY; v <= SCALE_MAX; v += TICK_EVERY) {
+        const origin = dir.clone().multiplyScalar(v);
+
+        // Tick line (cross-hair on one perpendicular)
+        const tp = [
+          origin.clone().addScaledVector(perp1, -TICK_SIZE),
+          origin.clone().addScaledVector(perp1,  TICK_SIZE),
+        ];
+        const tGeo = new THREE.BufferGeometry().setFromPoints(tp);
+        axisGroup.add(new THREE.Line(tGeo, new THREE.LineBasicMaterial({ color })));
+
+        // Number label
+        const div = document.createElement('div');
+        div.textContent = v;
+        div.style.cssText = `color:${color};font:bold 15px monospace;opacity:0.9;text-shadow:0 0 4px #000;`;
+        const label = new CSS2DObject(div);
+        label.position.copy(origin.clone().addScaledVector(perp1, TICK_SIZE + 1.5));
+        axisGroup.add(label);
+      }
+    });
 
     // --- Model origin marker ---
     const modelOriginGeo = new THREE.SphereGeometry(0.012, 16, 16);
@@ -169,6 +237,7 @@
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
     let allMeshes = [];
+    const initialTransforms = new Map(); // mesh -> {position, quaternion, scale}
     let selectedMesh = null;
     let selectedOriginalMaterials = null; // array to handle multi-material
 
@@ -288,6 +357,26 @@
       if (e.key === 's' || e.key === 'S') setMode('scale');
     });
 
+    // --- Camera reset ---
+    let initCamPos = null, initCamTarget = null;
+
+    document.getElementById('btn-reset-cam').addEventListener('click', () => {
+      if (!initCamPos) return;
+      camera.position.copy(initCamPos);
+      orbitControls.target.copy(initCamTarget);
+      orbitControls.update();
+    });
+
+    // --- Reset button ---
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      deselectCurrent();
+      initialTransforms.forEach((t, mesh) => {
+        mesh.position.copy(t.position);
+        mesh.quaternion.copy(t.quaternion);
+        mesh.scale.copy(t.scale);
+      });
+    });
+
     // --- Load model ---
     const loader = new GLTFLoader();
     loader.load('human_head.glb', (gltf) => {
@@ -298,6 +387,9 @@
       model.traverse((obj) => {
         if (obj.isMesh) allMeshes.push(obj);
       });
+
+      // Snapshot transforms AFTER per-object overrides are applied (below)
+      // — done at end of load callback
 
       // --- object_4: translucent + 80x scale ---
       // Log all mesh names so we can verify the exact name
@@ -328,6 +420,15 @@
         }
       });
 
+      // Snapshot every mesh transform now that all overrides are applied
+      allMeshes.forEach((m) => {
+        initialTransforms.set(m, {
+          position: m.position.clone(),
+          quaternion: m.quaternion.clone(),
+          scale: m.scale.clone(),
+        });
+      });
+
       const box = new THREE.Box3().setFromObject(model);
       const center = new THREE.Vector3();
       const size = new THREE.Vector3();
@@ -341,15 +442,18 @@
       const markerScale = Math.max(size.x, size.y, size.z) * 0.025;
       originMarker.scale.setScalar(markerScale / 0.012);
       modelOriginMarker.scale.setScalar(markerScale / 0.012);
-      axesHelper.scale.setScalar(markerScale / 0.012 * 6);
 
-      const maxDim = Math.max(size.x, size.y, size.z);
-      camera.position.set(center.x, center.y, center.z + maxDim * 2);
+      const maxDim = Math.max(size.x, size.y, size.z, SCALE_MAX);
+      camera.position.set(0, 0, 250);
       camera.near = maxDim * 0.001;
       camera.far = maxDim * 100;
       camera.updateProjectionMatrix();
-      orbitControls.target.copy(center);
+      orbitControls.target.set(0, 0, 0);
       orbitControls.update();
+
+      // Snapshot for camera reset
+      initCamPos = camera.position.clone();
+      initCamTarget = orbitControls.target.clone();
 
       const fmt = (v) => v.toFixed(4);
       document.getElementById('origin-info').innerHTML =
@@ -374,13 +478,22 @@
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+      labelRenderer.setSize(window.innerWidth, window.innerHeight);
     });
 
     // --- Render loop ---
+    const camPosEl = document.getElementById('cam-pos');
+    const camRotEl = document.getElementById('cam-rot');
+    const _deg = (r) => (r * 180 / Math.PI).toFixed(1) + '°';
     function animate() {
       requestAnimationFrame(animate);
       orbitControls.update();
       renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
+      const p = camera.position;
+      camPosEl.textContent = `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`;
+      const e = camera.rotation;
+      camRotEl.textContent = `x:${_deg(e.x)} y:${_deg(e.y)} z:${_deg(e.z)}`;
     }
     animate();
   </script>
